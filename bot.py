@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import random  # <-- Добавили модуль для рандома
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -25,11 +26,10 @@ class QuizStates(StatesGroup):
     answering = State()
 
 # Генерация кнопок с вариантами ответов
-def get_options_keyboard(question_index):
+def get_options_keyboard(options):
     keyboard = InlineKeyboardBuilder()
-    options = QUIZ_DATA[question_index]["options"]
     for idx, option in enumerate(options):
-        keyboard.button(text=option, callback_data=f"ans_{question_index}_{idx}")
+        keyboard.button(text=option, callback_data=f"ans_{idx}")
     keyboard.adjust(1)
     return keyboard.as_markup()
 
@@ -38,14 +38,22 @@ def get_options_keyboard(question_index):
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     await state.set_state(QuizStates.answering)
-    await state.update_data(current_question=0, score=0)
     
-    first_q = QUIZ_DATA[0]["question"]
+    # Делаем копию списка вопросов и перемешиваем её случайным образом
+    shuffled_questions = QUIZ_DATA.copy()
+    random.shuffle(shuffled_questions)
+    
+    # Сохраняем перемешанный список вопросов и начальные очки в память пользователя (FSM)
+    await state.update_data(questions=shuffled_questions, current_question=0, score=0)
+    
+    first_q = shuffled_questions[0]["question"]
+    options = shuffled_questions[0]["options"]
+    
     await message.answer(
-        f"📊 Начинаем тест по формам 1С:ЗУП 3.1!\n\n"
-        f"**Вопрос 1 из {len(QUIZ_DATA)}:**\n{first_q}",
+        f"📊 Начинаем тест по формам 1С:ЗУП 3.1!\nВопросы будут идти в случайном порядке.\n\n"
+        f"**Вопрос 1 из {len(shuffled_questions)}:**\n{first_q}",
         parse_mode="Markdown",
-        reply_markup=get_options_keyboard(0)
+        reply_markup=get_options_keyboard(options)
     )
 
 # Обработка ответов
@@ -56,41 +64,44 @@ async def handle_answer(callback_query: types.CallbackQuery, state: FSMContext):
         await callback_query.answer("Тест уже завершен. Нажмите /start для начала нового.")
         return
 
-    _, q_idx, opt_idx = callback_query.data.split("_")
-    q_idx, opt_idx = int(q_idx), int(opt_idx)
-    
+    # Получаем данные о текущем тесте из памяти
     user_data = await state.get_data()
-    current_q = user_data.get("current_question", 0)
+    questions = user_data.get("questions", QUIZ_DATA)
+    current_q_idx = user_data.get("current_question", 0)
     score = user_data.get("score", 0)
     
-    if q_idx != current_q:
-        await callback_query.answer()
-        return
+    # Извлекаем выбранный пользователем индекс ответа
+    opt_idx = int(callback_query.data.split("_")[1])
 
-    correct_idx = QUIZ_DATA[current_q]["correct_index"]
+    # Проверяем правильность ответа на основе перемешанного списка
+    correct_idx = questions[current_q_idx]["correct_index"]
     if opt_idx == correct_idx:
         score += 1
         await callback_query.message.answer("✅ Правильно!")
     else:
-        correct_text = QUIZ_DATA[current_q]["options"][correct_idx]
+        correct_text = questions[current_q_idx]["options"][correct_idx]
         await callback_query.message.answer(f"❌ Неверно.\nПравильный ответ: {correct_text}")
 
-    next_q = current_q + 1
-    if next_q < len(QUIZ_DATA):
-        await state.update_data(current_question=next_q, score=score)
-        next_q_text = QUIZ_DATA[next_q]["question"]
+    # Переходим к следующему вопросу
+    next_q_idx = current_q_idx + 1
+    if next_q_idx < len(questions):
+        await state.update_data(current_question=next_q_idx, score=score)
+        
+        next_q_text = questions[next_q_idx]["question"]
+        next_options = questions[next_q_idx]["options"]
+        
         await callback_query.message.answer(
-            f"**Вопрос {next_q + 1} из {len(QUIZ_DATA)}:**\n{next_q_text}",
+            f"**Вопрос {next_q_idx + 1} из {len(questions)}:**\n{next_q_text}",
             parse_mode="Markdown",
-            reply_markup=get_options_keyboard(next_q)
+            reply_markup=get_options_keyboard(next_options)
         )
     else:
-        # --- НАША ФИНАЛЬНАЯ ФРАЗА ТЕПЕРЬ ТУТ ---
+        # --- ФИНАЛ ТЕСТА ---
         await state.clear()
         await callback_query.message.answer(
             f"🏆 **Тест успешно завершен!**\n\n"
-            f"Ваш итоговый результат: {score} из {len(QUIZ_DATA)} правильных ответов.\n\n"
-            f"🔄 Если вы хотите пройти тест еще раз, просто нажмите /start"
+            f"Ваш итоговый результат: {score} из {len(questions)} правильных ответов.\n\n"
+            f"🔄 Если вы хотите пройти тест еще раз (вопросы снова перемешаются), просто нажмите /start"
         )
     
     await callback_query.answer()
