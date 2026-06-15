@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-import random  # <-- Добавили модуль для рандома
+import random
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -25,11 +25,11 @@ dp = Dispatcher(storage=MemoryStorage())
 class QuizStates(StatesGroup):
     answering = State()
 
-# Генерация кнопок с вариантами ответов
-def get_options_keyboard(options):
+# Генерация кнопок (теперь передаем и индекс вопроса в списке QUIZ_DATA, и индекс ответа)
+def get_options_keyboard(original_q_idx, options):
     keyboard = InlineKeyboardBuilder()
     for idx, option in enumerate(options):
-        keyboard.button(text=option, callback_data=f"ans_{idx}")
+        keyboard.button(text=option, callback_data=f"ans_{original_q_idx}_{idx}")
     keyboard.adjust(1)
     return keyboard.as_markup()
 
@@ -39,21 +39,23 @@ async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     await state.set_state(QuizStates.answering)
     
-    # Делаем копию списка вопросов и перемешиваем её случайным образом
-    shuffled_questions = QUIZ_DATA.copy()
-    random.shuffle(shuffled_questions)
+    # Создаем список из индексов всех вопросов (например: [0, 1, 2, 3...])
+    question_indices = list(range(len(QUIZ_DATA)))
+    # Перемешиваем именно индексы, чтобы получить случайный порядок
+    random.shuffle(question_indices)
     
-    # Сохраняем перемешанный список вопросов и начальные очки в память пользователя (FSM)
-    await state.update_data(questions=shuffled_questions, current_question=0, score=0)
+    # Сохраняем перемешанную последовательность индексов в память (FSM)
+    await state.update_data(order=question_indices, current_step=0, score=0)
     
-    first_q = shuffled_questions[0]["question"]
-    options = shuffled_questions[0]["options"]
+    first_original_idx = question_indices[0]
+    first_q = QUIZ_DATA[first_original_idx]["question"]
+    options = QUIZ_DATA[first_original_idx]["options"]
     
     await message.answer(
         f"📊 Начинаем тест по формам 1С:ЗУП 3.1!\nВопросы будут идти в случайном порядке.\n\n"
-        f"**Вопрос 1 из {len(shuffled_questions)}:**\n{first_q}",
+        f"**Вопрос 1 из {len(QUIZ_DATA)}:**\n{first_q}",
         parse_mode="Markdown",
-        reply_markup=get_options_keyboard(options)
+        reply_markup=get_options_keyboard(first_original_idx, options)
     )
 
 # Обработка ответов
@@ -64,44 +66,51 @@ async def handle_answer(callback_query: types.CallbackQuery, state: FSMContext):
         await callback_query.answer("Тест уже завершен. Нажмите /start для начала нового.")
         return
 
-    # Получаем данные о текущем тесте из памяти
+    # Получаем данные текущей сессии
     user_data = await state.get_data()
-    questions = user_data.get("questions", QUIZ_DATA)
-    current_q_idx = user_data.get("current_question", 0)
+    order = user_data.get("order")
+    current_step = user_data.get("current_step", 0)
     score = user_data.get("score", 0)
     
-    # Извлекаем выбранный пользователем индекс ответа
-    opt_idx = int(callback_query.data.split("_")[1])
+    # Разбираем callback_data (получаем оригинальный индекс вопроса и выбранный ответ)
+    _, q_idx, opt_idx = callback_query.data.split("_")
+    q_idx, opt_idx = int(q_idx), int(opt_idx)
+    
+    # Проверяем, соответствует ли этот ответ текущему шагу теста
+    if order[current_step] != q_idx:
+        await callback_query.answer()
+        return
 
-    # Проверяем правильность ответа на основе перемешанного списка
-    correct_idx = questions[current_q_idx]["correct_index"]
+    # Проверяем ответ по оригинальным данным из QUIZ_DATA
+    correct_idx = QUIZ_DATA[q_idx]["correct_index"]
     if opt_idx == correct_idx:
         score += 1
         await callback_query.message.answer("✅ Правильно!")
     else:
-        correct_text = questions[current_q_idx]["options"][correct_idx]
+        correct_text = QUIZ_DATA[q_idx]["options"][correct_idx]
         await callback_query.message.answer(f"❌ Неверно.\nПравильный ответ: {correct_text}")
 
-    # Переходим к следующему вопросу
-    next_q_idx = current_q_idx + 1
-    if next_q_idx < len(questions):
-        await state.update_data(current_question=next_q_idx, score=score)
+    # Переходим к следующему шагу перемешанного списка
+    next_step = current_step + 1
+    if next_step < len(order):
+        await state.update_data(current_step=next_step, score=score)
         
-        next_q_text = questions[next_q_idx]["question"]
-        next_options = questions[next_q_idx]["options"]
+        next_original_idx = order[next_step]
+        next_q_text = QUIZ_DATA[next_original_idx]["question"]
+        next_options = QUIZ_DATA[next_original_idx]["options"]
         
         await callback_query.message.answer(
-            f"**Вопрос {next_q_idx + 1} из {len(questions)}:**\n{next_q_text}",
+            f"**Вопрос {next_step + 1} из {len(order)}:**\n{next_q_text}",
             parse_mode="Markdown",
-            reply_markup=get_options_keyboard(next_options)
+            reply_markup=get_options_keyboard(next_original_idx, next_options)
         )
     else:
-        # --- ФИНАЛ ТЕСТА ---
+        # --- ФИНАЛ ТЕСТА С НАШЕЙ ФРАЗОЙ ---
         await state.clear()
         await callback_query.message.answer(
             f"🏆 **Тест успешно завершен!**\n\n"
-            f"Ваш итоговый результат: {score} из {len(questions)} правильных ответов.\n\n"
-            f"🔄 Если вы хотите пройти тест еще раз (вопросы снова перемешаются), просто нажмите /start"
+            f"Ваш итоговый результат: {score} из {len(order)} правильных ответов.\n\n"
+            f"🔄 Если вы хотите пройти тест еще раз, просто нажмите /start"
         )
     
     await callback_query.answer()
