@@ -14,10 +14,10 @@ TOKEN = "8842900248:AAEmooqY8nO8IxSC2RAMvpGy6ZbT4bRih_g"
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Регистрируем ВСЕ обработчики (они автоматически подтягиваются из ваших файлов)
+# Регистрируем обработчики из вашего третьего файла логики
 register_handlers(dp)
 
-# Крошечный веб-сервер для удержания активности на Render.com
+# Крошечный веб-сервер для поддержки активности на Render.com
 async def handle(request):
     return web.Response(text="Bot is running!")
 
@@ -35,7 +35,7 @@ async def main():
     # Запускаем веб-сервер для Render
     await start_web_server()
     
-    # Удаляем вебхуки и запускаем опрос (Polling)
+    # Удаляем зависшие вебхуки и запускаем опрос (Polling)
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
