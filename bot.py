@@ -10,22 +10,27 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiohttp import web
 
-# Импортируем список вопросов из вашего файла questions.py
+# Безопасный импорт данных
 from questions import QUIZ_DATA
+
+try:
+    from questions_prof import QUIZ_DATA_PROF
+except ImportError:
+    QUIZ_DATA_PROF = []
+
+# Объединяем вопросы (если второй файл есть, бот его подхватит)
+ALL_QUESTIONS = QUIZ_DATA + QUIZ_DATA_PROF
 
 # Настройка логов
 logging.basicConfig(level=logging.INFO)
 
-# Инициализация бота
 TOKEN = "8842900248:AAEmooqY8nO8IxSC2RAMvpGy6ZbT4bRih_g"
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Состояния для викторины
 class QuizStates(StatesGroup):
     answering = State()
 
-# Генерация кнопок
 def get_options_keyboard(original_q_idx, options):
     keyboard = InlineKeyboardBuilder()
     for idx, option in enumerate(options):
@@ -33,32 +38,27 @@ def get_options_keyboard(original_q_idx, options):
     keyboard.adjust(1)
     return keyboard.as_markup()
 
-# Старт бота
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     await state.set_state(QuizStates.answering)
     
-    # Создаем список из индексов всех вопросов и перемешиваем его
-    question_indices = list(range(len(QUIZ_DATA)))
+    question_indices = list(range(len(ALL_QUESTIONS)))
     random.shuffle(question_indices)
     
-    # Сохраняем последовательность в память
     await state.update_data(order=question_indices, current_step=0, score=0)
     
     first_original_idx = question_indices[0]
-    first_q = QUIZ_DATA[first_original_idx]["question"]
-    options = QUIZ_DATA[first_original_idx]["options"]
+    first_q = ALL_QUESTIONS[first_original_idx]["question"]
+    options = ALL_QUESTIONS[first_original_idx]["options"]
     
-    # Убрали фразу про случайный порядок из текста подписи
     await message.answer(
-        f"📊 Начинаем тест по формам 1С:ЗУП 3.1!\n\n"
-        f"**Вопрос 1 из {len(QUIZ_DATA)}:**\n{first_q}",
+        f"📊 Начинаем тест по ЗУП 3.1!\n\n"
+        f"**Вопрос 1 из {len(ALL_QUESTIONS)}:**\n{first_q}",
         parse_mode="Markdown",
         reply_markup=get_options_keyboard(first_original_idx, options)
     )
 
-# Обработка ответов
 @dp.callback_query(lambda c: c.data.startswith("ans_"))
 async def handle_answer(callback_query: types.CallbackQuery, state: FSMContext):
     current_state = await state.get_state()
@@ -78,12 +78,12 @@ async def handle_answer(callback_query: types.CallbackQuery, state: FSMContext):
         await callback_query.answer()
         return
 
-    correct_idx = QUIZ_DATA[q_idx]["correct_index"]
+    correct_idx = ALL_QUESTIONS[q_idx]["correct_index"]
     if opt_idx == correct_idx:
         score += 1
         await callback_query.message.answer("✅ Правильно!")
     else:
-        correct_text = QUIZ_DATA[q_idx]["options"][correct_idx]
+        correct_text = ALL_QUESTIONS[q_idx]["options"][correct_idx]
         await callback_query.message.answer(f"❌ Неверно.\nПравильный ответ: {correct_text}")
 
     next_step = current_step + 1
@@ -91,8 +91,8 @@ async def handle_answer(callback_query: types.CallbackQuery, state: FSMContext):
         await state.update_data(current_step=next_step, score=score)
         
         next_original_idx = order[next_step]
-        next_q_text = QUIZ_DATA[next_original_idx]["question"]
-        next_options = QUIZ_DATA[next_original_idx]["options"]
+        next_q_text = ALL_QUESTIONS[next_original_idx]["question"]
+        next_options = ALL_QUESTIONS[next_original_idx]["options"]
         
         await callback_query.message.answer(
             f"**Вопрос {next_step + 1} из {len(order)}:**\n{next_q_text}",
@@ -102,14 +102,17 @@ async def handle_answer(callback_query: types.CallbackQuery, state: FSMContext):
     else:
         await state.clear()
         await callback_query.message.answer(
-            f"🏆 **Тест успешно завершен!**\n\n"
-            f"Ваш итоговый результат: {score} из {len(order)} правильных ответов.\n\n"
-            f"🔄 Если вы хотите пройти тест еще раз, просто нажмите /start"
+            f"🏆 **Тест завершен!**\n\n"
+            f"Результат: {score} из {len(order)}.\n\n"
+            f"🔄 Нажмите /start для повтора."
         )
     
-    await callback_query.answer()
+    # Безопасный ответ на колбэк
+    try:
+        await callback_query.answer()
+    except Exception:
+        pass
 
-# Веб-сервер для Render
 async def handle(request):
     return web.Response(text="Bot is running!")
 
